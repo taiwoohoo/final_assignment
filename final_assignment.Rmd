@@ -1,0 +1,619 @@
+---
+title: "Final_Assignment (Summative)"
+author: "Chunhung Tai"
+date: "2024-01-20"
+output: html_document
+---
+
+------------------------------------------------------------------------
+# GitHub
+https://github.com/taiwoohoo/final_assignment.git
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+# Introduction
+
+Rolling Stone Magazine published a compilation of the 100 most influential musical artists of all time. This selection, made by 55 music industry professionals, offers a broad perspective on the enduring impact of these artists. To explore the lasting influence of these artists as of 2023, the report analyze their current popularity and identify any common characteristics among those who remain influential.
+
+My first step was to extract the list of names from the online article. I then utilized the Spotify Web API to gather detailed information about each artist, including metrics such as popularity and followers, and data on genres. Additionally, I turned to MusicBrainz to further understand the nature of these artists, particularly in terms of gender, group or solo status, where did they perform, and the year their careers began.
+
+Having gathered and cleaned the data, my focus shifted to artists with a Spotify popularity score of 70 or higher. This group represents the artists who are considered popular today. My analysis aims to dissect this data to better answer how the music of these influential artists has endured over time and to identify any shared traits among the artists who continue to captivate audiences today.
+
+# Data
+
+The data for this report was gathered from three sources: Rolling Stone's "100 Greatest Artists", Spotify, and MusicBrainz. The acquisition process involved dynamic scraping and API requests, with the extracted data subsequently stored in a SQL database for efficient handling and analysis.
+
+Rolling Stone's "100 Greatest Artists": The artist names and their corresponding numbers were extracted using dynamic scraping. Initially considering static scraping, I soon realized the limitations due to the dynamic nature of the website's links, which changed upon scrolling. Dynamic scraping was more useful to capture the complete data set.
+
+Spotify Web API: The extraction from Spotify required several key components: credentials, access tokens, and the artists' unique Spotify IDs. These IDs were obtained by dynamically scraping Google search results for "artist name + Spotify". With the necessary access, I utilized the API endpoint capable of fetching data for up to 50 artists simultaneously, repeating the process to cover all artists. This approach yielded detailed information about each artist's popularity, followers, and genres.
+
+MusicBrainz: Although MusicBrainz offers an API, I opted for dynamic scraping to gather data on artist type (individual/group), gender, area, and the year they began performing. This decision was driven by the API requests requirement , which would have required individual artist IDs in MusicBrainz system.
+
+In this analysis, Spotify's popularity\* metric serves as the key indicator of an artist's current standing. This metric was on a 0 to 100 scale, where 0 implies no popularity, and 100 represents the highest level of popularity among tracks on the platform. For the purposes of this report, artists with a popularity score of 70 or higher are classified as 'popular'. This threshold is set above the median mark of 50 to distinguish artists who are not just popular but highly popular in the current music landscape.
+
+-   More detailed information on Spotify popularity:<https://twostorymelody.com/spotify-popularity-index/>
+
+```{r, echo=FALSE, include=FALSE}
+library(DBI)
+library(RSQLite)
+library(dplyr)
+library(stringr)
+library(RSelenium)
+library(rvest)
+library(tidyverse)
+library(DBI)
+library(httr)
+```
+
+```{r, echo=FALSE, include=FALSE}
+
+
+# Create a connection to the SQLite database for storing data later on
+database_folder <- "/Users/chunhung/Desktop/MY472/final_assignment"
+db_name <- "best_artist.sqlite"
+db_path <- file.path(database_folder, db_name)
+con <- DBI::dbConnect(RSQLite::SQLite(), db_path)
+
+# Check if the database file exists
+check_exists <- file.exists(db_path)
+check_exists
+
+
+# Set a function to check the table 
+check_table_info <- function(con, table_name) {
+  if (DBI::dbExistsTable(con, table_name)) {
+    num_rows <- DBI::dbGetQuery(con, sprintf("SELECT COUNT(*) FROM %s", table_name))
+    num_columns <- length(DBI::dbListFields(con, table_name))
+    sample_data <- DBI::dbGetQuery(con, sprintf("SELECT * FROM %s LIMIT 5", table_name))
+    
+    cat("Number of rows:", num_rows[1, 1], "\nNumber of columns:", num_columns, "\nSample data:\n")
+    print(sample_data)
+  } else {
+    cat("Table", table_name, "does not exist.")
+  }
+}
+
+
+# # Get the artist list from Rolling Stone website, using dynamic web scrape and by two link(the first link covers 51-100 artists and the second link covers 1-50)
+# #rD <- rsDriver(browser=c("firefox"), verbose = F, port = netstat::free_port(random = TRUE), chromever = NULL) 
+# #remDr <- rD$client
+# 
+# # Set a function to scrape data from a single page
+# scrape_data <- function(url) {
+#   remDr$navigate(url)
+#   Sys.sleep(3)  # wait for the content to load
+#   page_source <- remDr$getPageSource()[[1]]
+#   html <- read_html(page_source)
+#   
+#   # Extract numbers and artist names
+#   numbers_xpath <- "//*[@class='c-gallery-vertical-album__number']"
+#   numbers <- html_nodes(html, xpath = numbers_xpath) %>% html_text() %>% as.numeric()
+#   
+#   artists_xpath <- "//*[@class='c-gallery-vertical-album__title']"
+#   artists <- html_nodes(html, xpath = artists_xpath) %>% html_text()
+#   
+#   # Combine into a dataframe
+#   data <- data.frame(Number = numbers, Artist = artists)
+#   return(data)
+# }
+# 
+# # URLs
+# url1 <- "https://www.rollingstone.com/music/music-lists/100-greatest-artists-147446/"
+# url2 <- "https://www.rollingstone.com/music/music-lists/100-greatest-artists-147446/the-band-2-88489/"
+# 
+# # Scrape data from both URLs
+# data1 <- scrape_data(url1)
+# data2 <- scrape_data(url2)
+# 
+# # Combine the data
+# artitst_rank <- rbind(data1, data2)
+# 
+# as.tibble(artitst_rank)
+# 
+# # Print the data
+# print(artitst_rank)
+# 
+# # Close the browser
+# remDr$close()
+# 
+# 
+# 
+# # Getting the link(i found it might be difficult to use Spotify to get the link for the artist so I use their name + Spotify to search in Google to get the result. I expect the first result would be the correct one.)
+# 
+# 
+# rD <- rsDriver(browser=c("firefox"), verbose = F, port = netstat::free_port(random = TRUE), chromever = NULL) 
+# remDr <- rD$client
+# 
+# # Function to search Google and get the first result link
+# get_first_google_result <- function(query) {
+#   search_url <- paste0("https://www.google.com/search?q=", URLencode(query))
+#   remDr$navigate(search_url)
+#   Sys.sleep(2)  # wait for the page to load
+#   
+#   # Define XPaths
+#   xpaths <- c("//*[@id='rso']/div[1]/div/div/div[1]/div/div/span/a",
+#               "//*[@id='rso']/div[1]/div/div/div/div[1]/div/div/span/a",
+#               "//*[@id='rso']/div[1]/div/div/div/div/div/div/div/div[1]/div/span/a")
+#   
+#   # Iterate through XPaths and find the first result
+#   for (xpath in xpaths) {
+#     elements <- remDr$findElements(using = "xpath", xpath)
+#     if (length(elements) > 0) {
+#       first_result_link <- elements[[1]]$getElementAttribute("href")[[1]]
+#       return(first_result_link)
+#     }
+#   }
+#   return(NA)
+# }
+# 
+# # Add "Spotify" to each artist name for the search
+# search_queries <- paste(artitst_rank$Artist, "Spotify")
+# 
+# # Initialize a vector to store the first result link for each artist
+# first_result_links <- vector("list", length(search_queries))
+# 
+# # Perform the Google search and get the first result link for each artist
+# for (i in seq_along(search_queries)) {
+#   first_result_links[[i]] <- get_first_google_result(search_queries[i])
+#   Sys.sleep(1) # Throttle requests to avoid being blocked
+# }
+# 
+# # Add the results to the artitst_rank tibble
+# artitst_rank$First_Link <- unlist(first_result_links)
+# 
+# # Close the browser
+# remDr$close()
+# 
+# # Turn the link to id 
+# artitst_rank <- artitst_rank %>%
+#   mutate(Spotify_ID = str_extract(First_Link, "(?<=artist/)[^/]+$")) %>%
+#   select(-First_Link)  # Optionally, remove the original First_Link column
+# 
+# # View the updated tibble
+# print(artitst_rank)
+# 
+# # Write the result to SQL
+# DBI::dbWriteTable(con, name = "artitst_rank", value = artitst_rank, row.names = FALSE, overwrite = TRUE)
+# 
+# 
+# 
+# # Get the token from Spotify for API request
+# 
+# library(httr)
+# library(openssl)
+# 
+# # Your Spotify API credentials
+# client_id <- "???"       # Replace with your client ID
+# client_secret <- "???"   # Replace with your client secret
+# 
+# # Prepare the credentials
+# credentials <- paste(client_id, client_secret, sep = ":")
+# encoded_credentials <- base64_encode(credentials)
+# 
+# # Setup the POST request headers and body
+# headers <- c(
+#   'Authorization' = paste('Basic', encoded_credentials),
+#   'Content-Type' = 'application/x-www-form-urlencoded'
+# )
+# 
+# body <- list(grant_type = "client_credentials")
+# 
+# # Make the POST request
+# response <- POST(url = "https://accounts.spotify.com/api/token", add_headers(.headers = headers), body = body, encode = "form")
+# 
+# # Check the response status and print the access token
+# if(response$status_code == 200) {
+#   token <- content(response)$access_token
+#   print(token)
+# } else {
+#   print("Failed to retrieve the token")
+# }
+# 
+# 
+# # get the data from API call 
+# 
+# spotify_ids <- artists_rank$Spotify_ID
+# 
+# # Split the list of IDs into chunks of 50
+# chunks <- split(spotify_ids, ceiling(seq_along(spotify_ids)/50))
+# 
+# # Define base URL and endpoint
+# base_url <- "https://api.spotify.com"
+# endpoint <- "/v1/artists"
+# 
+# # Authorization token
+# token <- "???"
+# 
+# # Function to make API call
+# get_artists_info <- function(ids) {
+#   full_url <- paste0(base_url, endpoint, "?ids=", paste(ids, collapse = ","))
+#   response <- GET(full_url, add_headers(Authorization = paste("Bearer", token)))
+#   
+#   if (status_code(response) == 200) {
+#     return(content(response, "parsed"))
+#   } else {
+#     warning("Error with status code: ", status_code(response))
+#     return(NULL)
+#   }
+# }
+# 
+# # Initialize list to store results
+# all_artists_info <- list()
+# 
+# # Loop over chunks and make API calls
+# for (chunk in chunks) {
+#   chunk_info <- get_artists_info(chunk)
+#   all_artists_info <- c(all_artists_info, list(chunk_info))
+# }
+# 
+# 
+# # Process data from API request to organized table
+# # Function to extract relevant information from an artist object
+# extract_artist_info <- function(artist) {
+#   data.frame(
+#     name = artist$name,
+#     id = artist$id,
+#     popularity = artist$popularity,
+#     type = artist$type,
+#     followers = artist$followers$total,
+#     genres = paste(artist$genres, collapse = ", ")
+#   )
+# }
+# 
+# # Initialize an empty dataframe to store the results
+# all_artists_df <- data.frame()
+# 
+# # Loop through each artist in each batch of results
+# for (batch in all_artists_info) {
+#   for (artist in batch$artists) {
+#     artist_df <- extract_artist_info(artist)
+#     all_artists_df <- rbind(all_artists_df, artist_df)
+#   }
+# }
+# 
+# # View the structured dataframe
+# all_artists_df
+# 
+# 
+# # Merge, clean and reorder the dataframe to keep only data needed later on 
+# 
+# # Merge the two dataframes
+# merged_data <- merge(artists_rank, all_artists_df, by.x = "Spotify_ID", by.y = "id")
+# 
+# # Remove the 'name' and 'Spotify_ID' columns
+# merged_data <- merged_data[, !colnames(merged_data) %in% c("name", "Spotify_ID", "type")]
+# 
+# # Rename 'Number' column to 'Rank_by_RS'
+# names(merged_data)[names(merged_data) == "Number"] <- "Rank_by_RS"
+# 
+# # Reorder columns to move 'Artist' to the first column
+# merged_data <- merged_data[c("Artist", setdiff(names(merged_data), "Artist"))]
+# 
+# # Delete "Rank_by_RS" because it's not a foraml rank
+# merged_data <- merged_data %>% 
+#   select(-Rank_by_RS)
+# 
+# # Rename hte merged_data 
+# artist_info_spotify <- merged_data
+
+ 
+# # Write "artist_info_spotify" to SQL 
+# db_name <- "best_artist.sqlite"
+# db_path <- file.path("/Users/chunhung/Desktop/MY472/final_assignment", db_name)
+# con <- DBI::dbConnect(RSQLite::SQLite(), db_path)
+# DBI::dbWriteTable(con, name = "artist_info_spotify", value = artist_info_spotify, row.names = FALSE, overwrite = TRUE)
+check_table_info(con, "artist_info_spotify")
+
+
+
+```
+
+```{r, echo=FALSE, include=FALSE}
+# # Collect extra data from MusicBrainz
+# 
+# # Take only the name from the previous data
+# artist <- data.frame(Artist = artist_info_spotify$Artist)
+# 
+# 
+# # Scrape the data from MusicBrainz. I tried to run the code once with only one scrape attempt but the website was not stable sometimes led to another page without correct data. I rewrote the code with at most three attempts if the previous run didn't get the data. 
+# rD <- rsDriver(browser=c("firefox"), verbose = F, port = netstat::free_port(random = TRUE), chromever = NULL) 
+# remDr <- rD$client
+# 
+# # Function to scrape artist info with retry logic
+# scrape_artist_info <- function(artist_name, remDr) {
+#   attempt_count <- 0
+#   max_attempts <- 3
+#   
+#   while (attempt_count < max_attempts) {
+#     remDr$navigate("https://musicbrainz.org/")
+#     
+#     # Find the search box and enter the artist name
+#     search_box <- remDr$findElement(using = "css selector", "#headerid-query")
+#     search_box$sendKeysToElement(list(artist_name, key = "enter"))
+#     
+#     # Wait for the results to load
+#     Sys.sleep(1) # Adjust as needed
+#     
+#     # Get page source and read with rvest
+#     page_source <- remDr$getPageSource()[[1]]
+#     page <- read_html(page_source)
+#     
+#     # Check if data is available
+#     data_available <- length(html_nodes(page, css = "#content > table > tbody > tr:nth-child(1) > td")) > 0
+#     
+#     if (data_available) {
+#       # Extract data using CSS selectors
+#       artist_type <- try(html_text(html_node(page, css = "#content > table > tbody > tr:nth-child(1) > td:nth-child(3)")) %>% .[1], silent = TRUE)
+#       gender <- try(html_text(html_node(page, css = "#content > table > tbody > tr:nth-child(1) > td:nth-child(4)")) %>% .[1], silent = TRUE)
+#       area <- try(html_text(html_node(page, css = "#content > table > tbody > tr:nth-child(1) > td:nth-child(5) > a > bdi")) %>% .[1], silent = TRUE)
+#       begin <- try(html_text(html_node(page, css = "#content > table > tbody > tr:nth-child(1) > td:nth-child(6)")) %>% .[1], silent = TRUE)
+#       
+#       return(data.frame(Artist = artist_name, Type = artist_type, Gender = gender, Area = area, Begin = begin))
+#     } else {
+#       attempt_count <- attempt_count + 1
+#     }
+#   }
+#   
+#   # Return NA if data is not found after max attempts
+#   return(data.frame(Artist = artist_name, Type = NA, Gender = NA, Area = NA, Begin = NA))
+# }
+# 
+# # Initialize an empty dataframe to store results
+# artist_info_results <- data.frame()
+# 
+# # Loop through each artist in your artist dataframe
+# for (artist in artist$Artist) {
+#   artist_data <- scrape_artist_info(artist, remDr)
+#   artist_info_results <- rbind(artist_info_results, artist_data)
+# }
+# 
+# # Close the RSelenium browser session
+# remDr$close()
+# 
+# 
+# # Check the data and manually correct some info 
+# artist_info_results
+# 
+# # Correct the row for "The Drifters"
+# artist_info_results[artist_info_results$Artist == "The Drifters", ] <- c("The Drifters", "Group", NA, "United States", "1953-05")
+# 
+# # Replace "England" with "United Kingdom"
+# artist_info_results$Area <- gsub("England", "United Kingdom", artist_info_results$Area)
+# 
+# # Keep only the year in the "Begin" column
+# artist_info_results$Begin <- sub("-.*", "", artist_info_results$Begin)
+# 
+# # Put NA for empty data for better result display and caculate later on  
+# artist_info_results[artist_info_results == ""] <- NA
+# 
+# # View the cleaned data frame
+# print(artist_info_results)
+# 
+# view(artist_info_results)
+# 
+# artist_info_musicbrainz <- artist_info_results
+# 
+# View(artist_info_musicbrainz)
+# 
+# # Write data from MusicBrainz to SQL
+# db_name <- "best_artist.sqlite"
+# db_path <- file.path("/Users/chunhung/Desktop/MY472/final_assignment", db_name)
+# con <- DBI::dbConnect(RSQLite::SQLite(), db_path)
+# DBI::dbWriteTable(con, name = "artist_info_musicbrainz", value = artist_info_musicbrainz, row.names = FALSE, overwrite = TRUE)
+ check_table_info(con, "artist_info_musicbrainz")
+ 
+
+
+
+
+```
+
+```{r, echo=FALSE, include=FALSE}
+# # Merging artist_info_musicbrainz and artist_info_spotify together and write it into SQL
+# artist_info_combined <- merge(artist_info_musicbrainz, artist_info_spotify, by = "Artist")
+# 
+# db_name <- "best_artist.sqlite"
+# db_path <- file.path("/Users/chunhung/Desktop/MY472/final_assignment", db_name)
+# con <- DBI::dbConnect(RSQLite::SQLite(), db_path)
+# DBI::dbWriteTable(con, name = "artist_info_combined", value = artist_info_combined, row.names = FALSE, overwrite = TRUE)
+check_table_info(con, "artist_info_combined")
+
+```
+
+# Analysis
+
+## How has their music endured?
+
+In assessing the lasting popularity of the artists listed in Rolling Stone's "100 Greatest Artists," I chose to Spotify's popularity metric as a key indicator. This metric serves as a barometer for understanding how often their music is played and appreciated by contemporary audiences.
+
+The analysis gave an picture of these artists' endurance in the music industry:
+
+93 out of 100 artists have a popularity score of 50 or higher. 70 out of 100 artists score 60 or higher. 43 out of 100 artists achieve a score of 70 or above,, indicating a strong presence in today's music scene.
+
+The table below shows the popularity of each artist in the order of decreasing value.
+```{r, echo=FALSE, include=TRUE}
+library(DBI)
+library(RSQLite)
+library(dplyr)
+
+
+# Connect to the SQLite database
+connection <- dbConnect(RSQLite::SQLite(), dbname = "/Users/chunhung/Desktop/MY472/final_assignment/best_artist.sqlite")
+# Execute the SQL query and retrieve the data
+popularity_data <- dbGetQuery(connection, "SELECT Artist, popularity FROM artist_info_combined ORDER BY popularity DESC")
+# Close the database connection
+dbDisconnect(connection)
+popularity_data
+
+# Add a column for popularity >= 50
+popularity_data$popularity_50_or_more <- ifelse(popularity_data$popularity >= 50, 1, 0)
+
+# Add a column for popularity >= 60
+popularity_data$popularity_60_or_more <- ifelse(popularity_data$popularity >= 60, 1, 0)
+
+# Add a column for popularity >= 70
+popularity_data$popularity_70_or_more <- ifelse(popularity_data$popularity >= 70, 1, 0)
+
+
+# Calculate the sum for "popularity_50_or_more" column
+count_50_or_more <- sum(popularity_data$popularity_50_or_more)
+
+# Calculate the sum for "popularity_60_or_more" column
+count_60_or_more <- sum(popularity_data$popularity_60_or_more)
+
+# Calculate the sum for "popularity_70_or_more" column
+count_70_or_more <- sum(popularity_data$popularity_70_or_more)
+
+# Display the sums
+cat("count for artist with popularity >= 50:", count_50_or_more, "\n")
+cat("count for artist with popularity >= 60:", count_60_or_more, "\n")
+cat("count for artist with popularity >= 70:", count_70_or_more, "\n")
+
+```
+
+
+
+
+
+## Features or Characteristics that seem to explain enduring engagement
+
+Upon thorough examination of the data, I have identified two noteworthy findings through a comparative analysis of the initial 100 artists and those who maintain enduring engagement.
+
+### The Early Era of Rock's Diminishing Presence 
+
+A notable trend is observed in the representation of artists from the early era of rock music.This shift implies that contemporary audiences may resonate more with artists from later generations. 
+
+For the entire dataset, artists from the 1910-1939 era constitute 20% of the list. This suggests a significant presence of early rock artists in the overall historical perspective.However, when focusing on artists with a popularity score of 70 or above, this era's representation drops to just 7%. This indicates a waning influence or recognition of early rock artists in today's music scene. This trend suggests their popularity may not be as pronounced among contemporary audiences.
+
+```{r, echo=FALSE, include=TRUE}
+
+# Connect to the SQLite database
+con <- dbConnect(RSQLite::SQLite(), dbname = "/Users/chunhung/Desktop/MY472/final_assignment/best_artist.sqlite")
+
+# Load the data into a data frame
+artist_info <- dbReadTable(con, "artist_info_combined")
+
+# Close the database connection
+dbDisconnect(con)
+
+
+# Function to categorize years into decades
+categorize_into_decades <- function(year) {
+  # Convert to numeric if it's not
+  if (!is.numeric(year)) {
+    year <- as.numeric(as.character(year))
+  }
+  decade_start <- (year %/% 10) * 10
+  paste(decade_start, decade_start + 9, sep="-")
+}
+
+# Apply the function to the 'Begin' column
+artist_info$Decade <- sapply(artist_info$Begin, categorize_into_decades)
+
+# Count the number of each decade in the entire dataset
+decade_counts_all <- table(artist_info$Decade)
+
+
+# Filter artists with popularity of 70 or higher
+filtered_artists <- subset(artist_info, popularity >= 70)
+
+# Apply the function to the 'Begin' column in the filtered dataset
+filtered_artists$Decade <- sapply(filtered_artists$Begin, categorize_into_decades)
+
+# Count the number of each decade in the filtered dataset
+decade_counts_filtered <- table(filtered_artists$Decade)
+
+
+# Calculate the percentage of each decade
+calculate_percentage <- function(counts) {
+  percentages <- (counts / sum(counts)) * 100
+  return(percentages)
+}
+
+# Modified calculate_percentage function with rounding
+calculate_percentage <- function(counts) {
+  percentages <- (counts / sum(counts)) * 100
+  # Round to 2 decimal places
+  rounded_percentages <- round(percentages, 1)
+  return(rounded_percentages)
+}
+
+# Calculate percentage for all data
+decade_percentage_all <- calculate_percentage(decade_counts_all)
+
+# Display the percentage for all data
+print("Decade percentage for all data:")
+print(decade_percentage_all)
+
+# Calculate percentage for data with popularity >= 70
+decade_percentage_filtered <- calculate_percentage(decade_counts_filtered)
+
+# Display the percentage for data with popularity >= 70
+print("Decade percentage for artists with popularity >= 70:")
+print(decade_percentage_filtered)
+
+
+
+
+
+
+```
+
+### Worsening Gender Imbalance in Popularity Trends
+
+The gender distribution among popular artists reveals a concerning trend: while the initial list shows a ratio of 2 females to 15 males, this disparity widens among those with higher popularity scores, shifting to 2 females for every 20 males. This pattern highlights an initial under representation of female artists, which is further exacerbated over a period of time.
+
+
+```{r, echo=FALSE, include=TRUE}
+# Connect to the SQLite database
+con <- dbConnect(RSQLite::SQLite(), dbname = "/Users/chunhung/Desktop/MY472/final_assignment/best_artist.sqlite")
+
+# Load the data into a data frame
+artist_info <- dbReadTable(con, "artist_info_combined")
+
+# Close the database connection
+dbDisconnect(con)
+
+# Replace NA in Gender with "Group"
+artist_info$Gender[is.na(artist_info$Gender)] <- "Group"
+
+# Reorder the Gender factor so that Group is last
+artist_info$Gender <- factor(artist_info$Gender, levels = c("Female", "Male", "Group"))
+
+# Count the number of each gender in the entire dataset
+gender_counts_all <- table(artist_info$Gender)
+
+# Display the counts for all data
+print("Gender counts for all data:")
+print(gender_counts_all)
+
+# Filter artists with popularity of 70 or higher
+filtered_artists <- subset(artist_info, popularity >= 70)
+
+# Replace NA in Gender with "Group" in the filtered dataset
+filtered_artists$Gender[is.na(filtered_artists$Gender)] <- "Group"
+
+# Reorder the Gender factor in the filtered dataset
+filtered_artists$Gender <- factor(filtered_artists$Gender, levels = c("Female", "Male", "Group"))
+
+# Count the number of each gender in the filtered dataset
+gender_counts_filtered <- table(filtered_artists$Gender)
+
+# Display the counts for data with popularity >= 70
+print("Gender counts for artists with popularity >= 70:")
+print(gender_counts_filtered)
+
+
+```
+
+Beyond these observations, aspects like artist type (group/person), genre, and area didn't reveal additional insights into enduring engagement. I recommend collecting more detailed data, such as song lyrics (to explore the appeal of romantic themes), the use of songs in movie soundtracks, or information about their record labels. Such data could provide a more comprehensive understanding of what drives lasting engagement. Additionally, conducting qualitative interviews could offer deeper insights or other directions into these dynamics.
+
+
+# Appendix: All code in this assignment
+
+```{r ref.label=knitr::all_labels(), echo=TRUE, eval=FALSE}
+
+```
